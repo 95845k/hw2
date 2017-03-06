@@ -881,4 +881,6 @@ The average treatment effect of aspirin on death or dependence at 6 month is `r 
 
 - of the algorithms tested, which algorithms perform the best? Justify your statement.
 
-The logistic regression model performed the best. It had the highest accuracy, looks best on the ROC curves graph and the precision-recall curves graph. At the far right of the precision-recall curves graph, logistic regression is very competitive if not the best. 
+The logistic regression model performed the best. It had the highest accuracy, looks best on the ROC curves graph and the precision-recall curves graph. At the far right of the precision-recall curves graph, logistic regression is very competitive if not the best.
+
+
