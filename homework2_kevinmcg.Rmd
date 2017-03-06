@@ -1,0 +1,884 @@
+---
+title: "Machine Learning for Health Care: Homework 2 - kevinmcg"
+output:
+  html_document:
+  fig_width: 7
+fig_height: 5
+---
+
+## Part 1: Concept questions (6 points)
+
+```{r eval=T, echo=F, message=F}
+## The code that follows introduces a toy data set, decision tree model, and two prediction functions.
+
+# load necessary libraries
+library(dplyr)
+library(mice)
+library(rpart)
+library(bnlearn)
+library(ROCR)
+library(ggplot2)
+
+## load part 1 one information
+# synthetic depression data
+depressionData = data.frame( # do not change "depressionData"
+  pregnant = c(1,0,1,1),
+  depressed = c("yes","yes","no","no") %>% as.factor(),
+  hospitalized = c(1, 0, 0, 0) %>% as.logical()
+) %>% tbl_df()
+
+# tree: a model that outputs the odds of hospitalization from inputs of data (datums)
+tree = data.frame( # do not change "tree"
+  splitVariable = c("depressed", "pregnant", NA, NA, NA),
+  split = c("yes", 1, NA, NA, NA),
+  trueChild = c(2, 4, NA, NA, NA),
+  falseChild = c(3, 5, NA, NA, NA),
+  odds = c(NA, NA, 0.1, 2, 3)
+)
+
+predictOddsOnDataSet = function(tree, data, active = 1) {
+  apply(data, 1, (function(x) {predictedOdds(tree=tree, x, active=1)})  )
+}
+
+predictedOdds = function(tree, datum, active = 1) {
+  
+  if(is.na(tree[active,"splitVariable"])) { # leaf of tree, so output value
+    
+    return(tree$odds[active])
+    
+  } else {                                  # internal node of tree, so continue down tree to true/false child
+    
+    if( (datum[[tree[active,"splitVariable"] %>% as.character]] %>% as.character) == tree[active,"split"])
+      return(predictedOdds(tree, datum, active = tree[active,"trueChild"]))
+    
+    else
+      return(predictedOdds(tree, datum, active = tree[active,"falseChild"]))
+    
+  }
+  
+}
+```
+  
+Fix the function ```predictedOdds``` so that ```predictedOddsOnDataSet``` outputs the odds for each patient in data. Use the debugger functions like ```debugonce(predictedOdds)``` or ```browser()``` to inspect the code. 
+
+```{r eval=T, echo=F, message=F}
+# debug predictedOdds function
+##debugonce(predictedOdds)
+
+# run predictOddsOnDataSet
+##predictOddsOnDataSet(tree, depressionData)
+```
+
+What did you change?
+
+I enclosed trueChild and falseChild in double quotes in the internal node section of ```predictedOdds```.
+
+
+Add a column of the predicted probabilities of hospitalization to depressionData. Display it.
+```{r eval=T, echo=F, message=F}
+# add a column of the predicted probabilities of hospitalization to depressionData
+depressionData <- depressionData %>% mutate(odds = predictOddsOnDataSet(tree, depressionData),
+                                            predicted.prob = odds / (1 + odds))
+
+# display depressionData
+depressionData
+```
+
+
+```{r eval=T, echo=F, message=F}
+# use a threshold probability of 0.5 for outcome prediction
+depressionData <- depressionData %>% mutate(outcome = hospitalized,
+                                            prediction = predicted.prob > 0.50)
+
+# add columns for reordering of outcome and prediction
+depressionData <- depressionData %>% 
+  transform(outcome.reorder = plyr::mapvalues(outcome, 
+                                from = c(TRUE, FALSE),
+                                to = c("1.TRUE", "2.FALSE")),
+            prediction.reorder = plyr::mapvalues(prediction, 
+                                from = c(TRUE, FALSE),
+                                to = c("1.TRUE", "2.FALSE")))
+
+# check reordering     
+##with(depressionData, table(outcome.reorder, outcome))
+##with(depressionData, table(prediction.reorder, prediction))
+
+# create confusion matrix using reordered outcome and prediction
+confmatrix.depressionData <- with(depressionData, table(prediction.reorder, outcome.reorder))
+
+# calculate accuracry
+acc.depressionData <- (confmatrix.depressionData[1, 1] + confmatrix.depressionData[2, 2]) / sum(colSums(confmatrix.depressionData))
+
+# calculate true positive rate/recall/sensitivity
+tpr.depressionData <- as.numeric(confmatrix.depressionData[1, 1] / 
+                                 colSums(confmatrix.depressionData)[1])
+
+# calculate false positive rate
+fpr.depressionData <- as.numeric(confmatrix.depressionData[1, 2] / 
+                                 colSums(confmatrix.depressionData)[2])
+
+# calculate specificity
+spec.depressionData <- 1 - fpr.depressionData
+
+# calculate precision
+prec.depressionData <- as.numeric(confmatrix.depressionData[1, 1] / 
+                                   rowSums(confmatrix.depressionData)[1])
+```  
+
+Using a threshold probability of 0.5, what is:
+
+- the accuracy of the model? The accuracy of the model is `r acc.depressionData`. 
+- the sensitivity of the model? The sensitivity of the model is `r tpr.depressionData`. 
+- the specificity of the model? The specificity of the model is `r spec.depressionData`. 
+- the precision of the model? The precision of the model is `r prec.depressionData`.
+- the recall of the model? The recall of the model is `r tpr.depressionData`.
+
+
+```{r eval=T, echo=F, message=F}
+# set number of individuals with diabetes at 5
+nDiab <- 5
+
+# set number of individuals without diabetes at 5
+nXDiab <- 5
+
+# set uninformative alpha
+priorAlphaU <- 0
+
+# set uninformative beta
+priorBetaU <- 0
+
+# set informative alpha
+priorAlphaI <- 11
+
+# set informative beta
+priorBetaI <- 21
+
+# set x settings for beta distribution
+xat <- seq(0,1,0.001)
+
+# run beta distribution using uninformative prior
+data.map.u <- data.frame(y = dbeta(xat,
+                                 shape1 = 1 + priorAlphaU + nDiab,
+                                 shape2 = 1 + priorBetaU + nXDiab),
+                         x = xat)
+
+# run beta distribution using informative prior
+data.map.i <- data.frame(y = dbeta(xat,
+                                   shape1 = 1 + priorAlphaI + nDiab,
+                                   shape2 = 1 + priorBetaI + nXDiab),
+                         x = xat)
+
+# graph informative
+beta.u.plot <- ggplot(data = data.map.u, aes(x = x, y = y)) +
+                geom_line() +
+                geom_vline(xintercept = data.map.u$x[which.max(data.map.u$y)], color="red") +
+                ggtitle("Beta prior: alpha = 0; beta = 0")
+
+# print out max
+##print(paste0("Max at ", data.map.u$x[which.max(data.map.u$y)]))
+
+# graph informative
+beta.i.plot <- ggplot(data = data.map.i, aes(x = x, y = y)) +
+                geom_line() +
+                geom_vline(xintercept = data.map.i$x[which.max(data.map.i$y)], color="red") +
+                ggtitle("Beta prior: alpha = 11; beta = 21")
+
+# print out max
+##print(paste0("Max at ", data.map.i$x[which.max(data.map.i$y)]))
+```
+
+Suppose you want to know the prevalence of diabetes in Pittsburgh. If you randomly survey 10 Pittsburghers and 5 of them state they have diabetes:
+
+- what is the maximum likelihood estimate for the prevalence of diabetes?
+
+The maximum likelihood estimate for the prevalence of diabetes (without strong priors) is `r data.map.u$x[which.max(data.map.u$y)]`.
+
+```{r eval=T, echo=F, message=F}
+beta.u.plot
+```
+
+- given your strong belief specified by a beta prior of $\alpha = 11, \beta = 21$, what is the maximum a posteriori estimate for the prevalence of diabetes?
+
+The maximum a posteriori estimate for the prevalence of diabetes (with strong priors) is `r data.map.i$x[which.max(data.map.i$y)]`. 
+
+```{r eval=T, echo=F, message=F}
+beta.i.plot
+```
+
+
+## Part 2: Analysis (9 points)
+```{r eval=T, echo=F, message=F}
+# import dataset
+data.ist.import <- 
+  read.csv("http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_corrected.csv")
+
+# copy import dataset
+data.ist <- data.ist.import
+
+# format column names
+names(data.ist) <- data.ist %>% names %>% tolower
+
+# change to tibble
+data.ist <- data.ist %>% tbl_df
+
+# check variables counts and names
+##write.csv(x = names(data.ist.import), file = "data_ist_import_variables.csv", row.names = F)
+
+# check for specific variable names
+##tail(names(data.ist.import), 10)
+
+# exclude non-model variables
+data.ist <- data.ist[, !(names(data.ist) 
+                       %in% 
+                         c("hospnum", 
+                           "rtime", "rdate", "hourlocal", "minlocal", "daylocal",
+                           "dasp14", "dasplt", "dlh14", "dmh14", "dhh14", "ondrug",
+                           "dsch", "divh", "dap", "doac", "dgorm", "dster", "dcaa",
+                           "dhaemd", "dcarend", "dthromb", "dmajnch", "dmajnchd",
+                           "dmajnchx", "dside", "dsided", "dsidex",
+                           "ddiagisc", "ddiagha", "ddiagun", "dnostrk", "dnostrkx",
+                           "drsisc", "drsiscd", "drsh", "drshd", "drsunk", "drsunkd",
+                           "dpe", "dped", "dalive", "dalived", "dplace", "ddead",
+                           "ddeadd", "ddeadc", "ddeadx",
+                           "fmethod", "fsource", "fdead", "flastd", "fdeadd",
+                           "fdeadc", "fdeadx", "frecover", "fdennis", "fplace", "fap", "foac",
+                           "fu1_recd", "fu2_done", "cntrynum", "fu1_comp", "nccode",
+                           "cmplasp", "cmplhep", "died", "td", "expd6", "expd14", "set14d", "id14",
+                           "dead1", "dead2", "dead3", "dead4", "dead5", "dead6", "dead7", "dead8",
+                           "h14", "isc14", "nk14", "strk14", "hti14", "mi14",
+                           "pe14", "dvt14", "tran14", "ncb14", "tich", "tmajh"
+                         ))]
+###no id
+###no time series
+###no 14 day observations
+###no final diagnosis
+###no other 6 month observations
+```
+
+
+#### Preliminaries
+- **Y:** What was the definition of the primary outcome in this study?
+
+The IST study had three primary outcomes: 
+(1) Death within 14 days
+(2) Death within six months
+(3) Dependency within six months
+
+- What is (are) the variable name(s) for the outcome?
+
+This analysis of IST data has one primary outcome: dead or dependent at 6 months. The variable name is occode and the values are occode == 1 | occode == 2 with the following counts:
+
+```{r eval=T, echo=F, message=F}
+(data.ist$occode == 1 | data.ist$occode == 2) %>% table()
+```
+
+
+- **U:** what is (are) the variable name(s) for the intervention, and what is (are) their possible values?
+
+The variable names and values for the intervention are:
+(1) RXASP Trial aspirin allocated (Y/N)
+(2) RXHEP Trial heparin allocated (M/L/N) [M is coded as H=high in pilot]
+
+The counts for aspirin  are as follows:
+```{r eval=T, echo=F, message=F}
+data.ist$rxasp %>% table()
+```
+
+The counts for heparin are as follows:
+```{r eval=T, echo=F, message=F}
+data.ist$rxhep %>% table()
+```
+The "H values" were re-coded as "M" for this analysis.
+
+
+- **V, W:** describe the covariates included and the population being studied.
+
+The covariates (V) include delay, age, sex, onset, conscious level, cardiac rhythm, systolic blood pressure, stroke syndrome, leg weakness, CT scan, appearance of pre-randomization CT, pre-randomizatiokn antithrombotic therapy, deficit and country.
+
+The population being studied (W) is 19,435 individuals with suspected ischaemic stroke with symptom onset within 48 hours in 476 hospitals in 30 countries without intracranial hameorrhage and no indicators for or against treatment.
+
+
+```{r eval=T, echo=F, message=F}
+#Construct a so-called Table 1 for groups of {aspirin, no aspirin} use, including information on age, gender, systolic blood pressure, and conscious state.
+# create aspirin T/F variable
+data.ist$aspirin <- as.factor(data.ist$rxasp == "Y")
+
+# create age breaks variable
+data.ist$age.breaks <- with(data.ist, 
+                            cut(age, 
+                                breaks = c(0, 50, 60, 70, 80, 200), 
+                                right = F,
+                                labels = c("<50", "50-59", "60-69", "70-79", ">80")))
+
+# check age breaks
+##with(data.ist, table(age, age.breaks))
+
+# create systolic blood pressure breaks variable
+data.ist$sbp.breaks <- with(data.ist, 
+                            cut(rsbp, 
+                                breaks = c(0, 140, 160, 180, 1000), 
+                                right = F,
+                                labels = c("<140", "140-159", "160-179", ">180")))
+
+# check sbp breaks
+##with(data.ist, table(rsbp, sbp.breaks))
+
+# create variable for conscious state descriptors
+data.ist <- data.ist %>% transform(conscious.state = plyr::mapvalues(rconsc, 
+                                                        from = c("F", "D", "U"),
+                                                        to = c("Alert", "Drowsy", "Unconscious")))
+
+# check conscious state assignments
+##with(data.ist, table(rconsc, conscious.state))
+```
+
+- Construct a so-called Table 1 for groups of {aspirin, no aspirin} use, including information on age, gender, systolic blood pressure, and conscious state.
+
+```{r eval=T, echo=F, message=F}
+# create table one output for age
+with(data.ist, table(age.breaks, aspirin))
+round((with(data.ist, table(age.breaks, aspirin)) / nrow(data.ist)) * 100, 1)
+
+# create table one output for sex
+with(data.ist, table(sex, aspirin))
+round((with(data.ist, table(sex, aspirin)) / nrow(data.ist)) * 100, 1)
+
+# create table one output for systolic blood pressure
+with(data.ist, table(sbp.breaks, aspirin))
+round((with(data.ist, table(sbp.breaks, aspirin)) / nrow(data.ist)) * 100, 1)
+
+# create table one output for conscious state
+with(data.ist, table(conscious.state, aspirin))
+round((with(data.ist, table(conscious.state, aspirin)) / nrow(data.ist)) * 100, 1)
+```
+
+#### Machine learning analysis
+```{r eval=T, echo=F, message=F}
+#Let our outcome of interest be “dead or dependent at 6 months”, i.e. so that we have a binary classification problem. 
+#Six month outcome (1-dead/2-dependent/3-not recovered/4-recovered/8 or OCCODE 9 – missing status
+# add outcome and index columns
+data.ist <- data.ist %>% mutate(outcome = occode == 1 | occode == 2,
+                                index = 1:nrow(data.ist))
+
+# check outcome column
+##data.ist %>% select(occode, outcome) %>% table
+
+# re-map h value for heparin
+data.ist <- data.ist %>% transform(rxhep = plyr::mapvalues(rxhep, 
+                                                            from = c("H"),
+                                                            to = c("M")))
+
+
+
+## research nas
+##summary(data.ist.import)
+vec.nas.count <- data.ist.import %>% is.na() %>% colSums()
+vec.nas.rownames <- data.ist.import %>% is.na() %>% colSums() %>% data.frame() %>% row.names()
+df.nas <- data.frame(variable = vec.nas.rownames, count.nas = vec.nas.count, stringsAsFactors = F)
+df.nas <- df.nas %>% filter(count.nas > 0)
+vec.nas.variables <- df.nas$variable
+vec.nas.length <- length(df.nas$variable)
+
+#"ondrug",	Estimate of time in days on trial treatment
+#"dmajnchd",	Date of above (yyyy/mm/dd)
+#"dsided",	Date of above (yyyy/mm/dd)
+#"drsiscd",	Date of above (yyyy/mm/dd)
+#"drshd",	Date of above (yyyy/mm/dd)
+#"drsunkd",	Date of above (yyyy/mm/dd)
+#"dped",	Date of above (yyyy/mm/dd)
+#"dalived",	Date of above (yyyy/mm/dd)
+#"ddeadd",	Date of above (yyyy/mm/dd); NOTE: this death is not necessarily within 14 days of randomisation
+#"ddeadc",	Cause of death (1-Initial stroke/2-Recurrent stroke (ischaemic or unknown)/3-Recurrent stroke (haemorrhagic)/4-Pneumonia/5-Coronary heart disease/6-Pulmonary embolism/7-Other vascular or unknown/8-Non-vascular/0-unknown)
+#"flastd",	Date of last contact
+#"fdeadd",	Date of death; NOTE: this death is not necessarily within 6 months of randomisation
+#"fdeadc",	Cause of death (1-Initial stroke/2-Recurrent stroke (ischaemic or unknown)/3-Recurrent stroke (haemorrhagic)/4-Pneumonia/5-Coronary heart disease/6-Pulmonary embolism/7-Other vascular or unknown/8-Non-vascular/0-unknown)
+#"fu1_recd",	Date discharge form received
+#"fu2_done",	Date 6 month follow-up done
+#"fu1_comp",	Date discharge form completed
+#"td",	Time of death or censoring in days
+
+
+## impute missing values
+# convert from factor to character for variables with factor = ""
+data.ist$ratrial <- as.character(data.ist$ratrial)
+data.ist$rasp3 <- as.character(data.ist$rasp3)
+data.ist$rhep24 <- as.character(data.ist$rhep24)
+
+# set "" values to NA
+data.ist[data.ist$ratrial == "", "ratrial"] <- NA
+data.ist[data.ist$rasp3 == "", "rasp3"] <- NA
+data.ist[data.ist$rhep24 == "", "rhep24"] <- NA
+
+# convert back to factor
+data.ist$ratrial <- as.factor(data.ist$ratrial)
+data.ist$rasp3 <- as.factor(data.ist$rasp3)
+data.ist$rhep24 <- as.factor(data.ist$rhep24)
+
+# check dataset for missing values
+##data.ist %>% is.na() %>% colSums()
+
+# impute missing values
+##missing.data.ist = md.pattern(data.ist)
+data.ist.m <- mice(data = data.ist, m = 5, maxit = 2, seed = 0)
+
+# complete dataset
+data.ist <- complete(data.ist.m, 1)
+
+# exclude non-model variables
+data.ist.shuffle <- data.ist[, !(names(data.ist) 
+                         %in% 
+                           c("expdd", "occode", "aspirin", 
+                             "age.breaks", "sbp.breaks", "conscious.state"))]
+
+# set seed for replication of random sampling
+set.seed(123)
+
+# create shuffled dataset
+data.ist.shuffle <- sample_n(tbl = data.ist.shuffle, size = nrow(data.ist.shuffle))
+
+# check shuffling
+##head(data.ist$index, 10)
+##head(data.ist.shuffle$index, 10)
+##tail(data.ist$index, 10)
+##tail(data.ist.shuffle$index, 10)
+
+#Note: for this analysis, using a simple 50-50 train-test split
+# create training dataset
+data.ist.train <- data.ist.shuffle[1:floor(nrow(data.ist.shuffle) / 2), ]
+
+# create testing dataset
+data.ist.test <- data.ist.shuffle[ceiling(nrow(data.ist.shuffle) / 2):nrow(data.ist.shuffle), ]
+
+# check row for data entirety
+##nrow(data.ist) - nrow(data.ist.train) - nrow(data.ist.test)
+
+# check data uniqueness
+##left_join(x = data.ist.train[, c("index", "outcome")],
+##          y = data.ist.test[, c("index", "outcome")],
+##          by = "index") %>% select(outcome.y) %>% is.na() %>% unique()
+
+##left_join(x = data.ist.test[, c("index", "outcome")],
+##          y = data.ist.train[, c("index", "outcome")],
+##          by = "index") %>% select(outcome.y) %>% is.na() %>% unique()
+
+# exclude non-model variables
+data.ist.train <- data.ist.train[, !(names(data.ist.train) %in% c("index"))]
+data.ist.test <- data.ist.test[, !(names(data.ist.test) %in% c("index"))]
+
+# check percent of patients with outcome equal to true in training dataset
+outcome.percent.train <- round(sum(data.ist.train$outcome) / nrow(data.ist.train) * 100, 1)
+
+# check percent of patients with outcome equal to true in testing dataset
+outcome.percent.test <- round(sum(data.ist.test$outcome) / nrow(data.ist.test) * 100, 1)
+```
+
+
+Let our outcome of interest be "dead or dependent at 6 months", i.e. so that we have a binary classification problem. What percent of patients are dead or dependent at 6 months in your train set and test set?
+
+The percent of patients are dead or dependent at 6 months in my train set is `r outcome.percent.train`.
+
+The percent of patients are dead or dependent at 6 months in my test set is `r outcome.percent.test`.
+
+
+Choose which variables to include in your model. For example, remove variables for outcomes at 14 days (because if you are dead at 14 days you are certainly dead at 6 months). Moreover, you should remove all features measured after baseline if you want to make a prediction based on baseline data. Similarly, specific indicators of the outcome should also be removed, since those are measurements past the baseline that are not our outcome of interest. For these reasons, you will need to remove clusters of variables. Justify your approach.
+
+I removed the hospital id variable, the date variables, the final diagnosis variables, the 14 day observation variables, and the non-primary outcome 6 month observation variables. My study dataset contains the primary (sole) outcome, the intervention variables, and the covariate variables. 
+
+
+Of the remaining variables, decide whether to exclude variables with missing data, impute them, and/or use indicator variables. (Note that if you choose multiple imputation for some variables, you would need to pool the results when evaluating performance, however for homework you may just use the first imputed data set). Justify your approach.
+
+My study dataset does not contain variables with any NAs. I did not intentionally remove all variables with NAs. I removed variables according to the approach above. Most of the `r vec.nas.length` variables that have NAs are date variables that did not fit this study. The other two are cause of death variables, which is not the primary outcome of this study. Here is the list of variable names `r vec.nas.variables`. Here is their description:
+- "ondrug",	Estimate of time in days on trial treatment
+- "dmajnchd",	Date of above (yyyy/mm/dd)
+- "dsided",	Date of above (yyyy/mm/dd)
+- "drsiscd",	Date of above (yyyy/mm/dd)
+- "drshd",	Date of above (yyyy/mm/dd)
+- "drsunkd",	Date of above (yyyy/mm/dd)
+- "dped",	Date of above (yyyy/mm/dd)
+- "dalived",	Date of above (yyyy/mm/dd)
+- "ddeadd",	Date of above (yyyy/mm/dd); NOTE: this death is not necessarily within 14 days of randomisation
+- "ddeadc",	Cause of death (1-Initial stroke/2-Recurrent stroke (ischaemic or unknown)/3-Recurrent stroke (haemorrhagic)/4-Pneumonia/5-Coronary heart disease/6-Pulmonary embolism/7-Other vascular or unknown/8-Non-vascular/0-unknown)
+- "flastd",	Date of last contact
+- "fdeadd",	Date of death; NOTE: this death is not necessarily within 6 months of randomisation
+- "fdeadc",	Cause of death (1-Initial stroke/2-Recurrent stroke (ischaemic or unknown)/3-Recurrent stroke (haemorrhagic)/4-Pneumonia/5-Coronary heart disease/6-Pulmonary embolism/7-Other vascular or unknown/8-Non-vascular/0-unknown)
+- "fu1_recd",	Date discharge form received
+- "fu2_done",	Date 6 month follow-up done
+- "fu1_comp",	Date discharge form completed
+- "td",	Time of death or censoring in days
+
+
+
+Upon further review, I found three of my covariates having a level of "". These values are in fact missing and are due primarily to not being recorded in the pilot phase of the study. I converted those variables to a string, converted the "" to NA, converted back to a factor, and ran the multivariate imputation by chained equations (mice) algorithm. I used the settings from the workshop to execute mice and complete the dataset. 
+
+
+
+```{r eval=T, echo=F, message=F, warning = F}
+## Logit
+# create logit model from training dataset
+model.logit <- glm(data = data.ist.train, outcome ~ ., family = binomial(link =  "logit"))
+
+# make predictions on testing dataset
+pred.logit <- predict(object = model.logit, newdata = data.ist.test, type = "response")
+
+# create dataframe of outcome and prediction probability
+pred.logit <- data.frame(outcome = data.ist.test$outcome, prediction.prob = pred.logit)
+
+# add prediction column
+pred.logit <- pred.logit %>% mutate(prediction = prediction.prob > 0.50)
+
+# add reordered outcome and prediction columns
+pred.logit <- pred.logit %>% transform(outcome.reorder = plyr::mapvalues(outcome, 
+                                                          from = c(TRUE, FALSE),
+                                                          to = c("1.TRUE", "2.FALSE")),
+                                       prediction.reorder = plyr::mapvalues(prediction, 
+                                                          from = c(TRUE, FALSE),
+                                                          to = c("1.TRUE", "2.FALSE")))
+# check reordered columns
+##with(pred.logit, table(outcome.reorder, outcome))
+##with(pred.logit, table(prediction.reorder, prediction))
+
+# create confusion matrix
+confmatrix.logit <- with(pred.logit, table(prediction.reorder, outcome.reorder))
+
+# calculate accuracy
+acc.logit <- (confmatrix.logit[1, 1] + confmatrix.logit[2, 2]) / sum(colSums(confmatrix.logit))
+
+# calculate error
+error.logit <- 1 - acc.logit
+
+# calculate confidence interval for accuracy
+acc.ci.logit <- 1.96 * (sqrt((error.logit * acc.logit) / nrow(data.ist.test)))
+
+# retrieve roc performance information
+roc.logit <- with(pred.logit, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("tpr", "fpr")
+
+# retrieve precision recall performance information
+precrec.logit <- with(pred.logit, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("prec", "rec")
+
+# create simple plots
+##roc.logit %>% plot
+##precrec.logit %>% plot
+
+# gather roc data
+roc.data.logit <- data.frame(tpr = roc.logit@y.values[[1]], fpr = roc.logit@x.values[[1]])
+
+# gather precision recall data
+precrec.data.logit <- data.frame(prec = precrec.logit@y.values[[1]], rec = precrec.logit@x.values[[1]])
+
+
+## Decision Tree
+# create decision tree model from training dataset
+model.dtree <- rpart(data = data.ist.train, outcome ~ ., method = "class")
+
+# make predictions on testing dataset
+pred.dtree <- predict(object = model.dtree, newdata = data.ist.test, type = "prob")
+
+# create dataframe of outcome and prediction probability
+pred.dtree <- data.frame(outcome = data.ist.test$outcome, prediction.prob = pred.dtree[, 2])
+
+# add prediction column
+pred.dtree <- pred.dtree %>% mutate(prediction = prediction.prob > 0.50)
+
+# check prediction 
+pred.dtree.check <- predict(object = model.dtree, newdata = data.ist.test, type = "class")
+pred.dtree$prediction.check <- pred.dtree.check
+##with(pred.dtree, table(prediction, prediction.check))
+
+# add reordered outcome and prediction columns
+pred.dtree <- pred.dtree %>% transform(outcome.reorder = plyr::mapvalues(outcome, 
+                                                          from = c(TRUE, FALSE),
+                                                          to = c("1.TRUE", "2.FALSE")),
+                                       prediction.reorder = plyr::mapvalues(prediction, 
+                                                          from = c(TRUE, FALSE),
+                                                          to = c("1.TRUE", "2.FALSE")))
+# check reordered columns
+##with(pred.dtree, table(outcome.reorder, outcome))
+##with(pred.dtree, table(prediction.reorder, prediction))
+
+# create confusion matrix
+confmatrix.dtree <- with(pred.dtree, table(prediction.reorder, outcome.reorder))
+
+# calculate accuracy
+acc.dtree <- (confmatrix.dtree[1, 1] + confmatrix.dtree[2, 2]) / sum(colSums(confmatrix.dtree))
+
+# calculate error
+error.dtree <- 1 - acc.dtree
+
+# calculate confidence interval for accuracy
+acc.ci.dtree <- 1.96 * (sqrt((error.dtree * acc.dtree) / nrow(data.ist.test)))
+
+# retrieve roc performance information
+roc.dtree <- with(pred.dtree, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("tpr", "fpr")
+
+# retrieve precision recall performance information
+precrec.dtree <- with(pred.dtree, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("prec", "rec")
+
+# create simple plots
+##roc.dtree %>% plot
+##precrec.dtree %>% plot
+
+# gather roc data
+roc.data.dtree <- data.frame(tpr = roc.dtree@y.values[[1]], fpr = roc.dtree@x.values[[1]])
+
+# gather precision recall data
+precrec.data.dtree <- data.frame(prec = precrec.dtree@y.values[[1]], rec = precrec.dtree@x.values[[1]])
+
+
+## create data for bnlearn algorithms
+# copy shuffled dataset
+data.ist.shuffle.f <- data.ist.shuffle
+
+# change integer variables to numeric
+data.ist.shuffle.f$rdelay <- as.numeric(data.ist.shuffle.f$rdelay)
+data.ist.shuffle.f$age <- as.numeric(data.ist.shuffle.f$age)
+data.ist.shuffle.f$rsbp <- as.numeric(data.ist.shuffle.f$rsbp)
+
+# change outcome variable from logical to factor
+data.ist.shuffle.f$outcome <- as.factor(as.numeric(data.ist.shuffle.f$outcome))
+
+# check outcome variable
+##table(data.ist.shuffle$outcome, data.ist.shuffle.f$outcome)
+
+# exclude non-model variables
+data.ist.shuffle.f <- data.ist.shuffle.f %>% select(-index)
+
+# discretize shuffled data
+data.ist.shuffle.f <- discretize(data.ist.shuffle.f)
+
+# split discretized shuffle data into train and test (50/50)
+data.ist.train.f <- data.ist.shuffle.f[1:floor(nrow(data.ist.shuffle.f) / 2), ]
+data.ist.test.f <- data.ist.shuffle.f[ceiling(nrow(data.ist.shuffle.f) / 2):nrow(data.ist.shuffle.f), ]
+
+
+## Naive Bayes
+# create naive bayes model from training dataset
+model.nb <- naive.bayes(x = data.ist.train.f, training = "outcome")
+
+# fit naive bayes model to training dataset
+fitted.nb <- bn.fit(x = model.nb, data = data.ist.train.f)
+
+# make predictions on testing dataset
+pred.nb <- predict(object = fitted.nb, data = data.ist.test.f)
+
+# retrieve prediction probabilities
+pred.prob.nb <- predict(object = fitted.nb, data = data.ist.test.f, prob = T) %>% 
+                attr("prob") %>% t() %>% tbl_df() %>% .[[2]]
+
+# create dataframe of outcome and prediction probability
+pred.nb <- data.frame(outcome = data.ist.test.f$outcome == 1, 
+                      prediction.prob = pred.prob.nb,
+                      prediction = pred.nb == 1)
+
+# add prediction column
+pred.nb <- pred.nb %>% mutate(prediction.check = prediction.prob > 0.50)
+
+# check prediction 
+##with(pred.nb, table(prediction.check, prediction))
+
+# add reordered outcome and prediction columns
+pred.nb <- pred.nb %>% transform(outcome.reorder = plyr::mapvalues(outcome, 
+                                                              from = c(TRUE, FALSE),
+                                                              to = c("1.TRUE", "2.FALSE")),
+                                 prediction.reorder = plyr::mapvalues(prediction, 
+                                                              from = c(TRUE, FALSE),
+                                                              to = c("1.TRUE", "2.FALSE")))
+
+# check reordered columns
+##with(pred.nb, table(outcome.reorder, outcome))
+##with(pred.nb, table(prediction.reorder, prediction))
+
+# create confusion matrix
+confmatrix.nb <- with(pred.nb, table(prediction.reorder, outcome.reorder))
+
+# calculate accuracy
+acc.nb <- (confmatrix.nb[1, 1] + confmatrix.nb[2, 2]) / sum(colSums(confmatrix.nb))
+
+# calculate error
+error.nb <- 1 - acc.nb
+
+# calculate confidence interval for accuracy
+acc.ci.nb <- 1.96 * (sqrt((error.nb * acc.nb) / nrow(data.ist.test)))
+
+# retrieve roc performance information
+roc.nb <- with(pred.nb, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("tpr", "fpr")
+
+# retrieve precision recall performance information
+precrec.nb <- with(pred.nb, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("prec", "rec")
+
+# create simple plots
+##roc.nb %>% plot
+##precrec.nb %>% plot
+
+# gather roc data
+roc.data.nb <- data.frame(tpr = roc.nb@y.values[[1]], fpr = roc.nb@x.values[[1]])
+
+# gather precision recall data
+precrec.data.nb <- data.frame(prec = precrec.nb@y.values[[1]], rec = precrec.nb@x.values[[1]])
+
+
+## Tree Augmented Naive Bayes
+# create tree augmented naive bayes model from training dataset
+model.tan <- tree.bayes(x = data.ist.train.f, training = "outcome")
+
+# fit tree augmented naive bayes model to training dataset
+fitted.tan <- bn.fit(x = model.tan, data = data.ist.train.f)
+
+# make predictions on testing dataset
+pred.tan <- predict(object = fitted.tan, data = data.ist.test.f)
+
+# retrieve prediction probabilities
+pred.prob.tan <- predict(object = fitted.tan, data = data.ist.test.f, prob = T) %>% 
+                 attr("prob") %>% t() %>% tbl_df() %>% .[[2]]
+
+# create dataframe of outcome and prediction probability
+pred.tan <- data.frame(outcome = data.ist.test.f$outcome == 1, 
+                       prediction.prob = pred.prob.tan,
+                       prediction = pred.tan == 1)
+
+# add prediction column
+pred.tan <- pred.tan %>% mutate(prediction.check = prediction.prob > 0.50)
+
+# check prediction 
+##with(pred.tan, table(prediction.check, prediction))
+
+# add reordered outcome and prediction columns
+pred.tan <- pred.tan %>% transform(outcome.reorder = plyr::mapvalues(outcome, 
+                                                                from = c(TRUE, FALSE),
+                                                                to = c("1.TRUE", "2.FALSE")),
+                                   prediction.reorder = plyr::mapvalues(prediction, 
+                                                                from = c(TRUE, FALSE),
+                                                                to = c("1.TRUE", "2.FALSE")))
+
+# check reordered columns
+##with(pred.tan, table(outcome.reorder, outcome))
+##with(pred.tan, table(prediction.reorder, prediction))
+
+# create confusion matrix
+confmatrix.tan <- with(pred.tan, table(prediction.reorder, outcome.reorder))
+
+# calculate accuracy
+acc.tan <- (confmatrix.tan[1, 1] + confmatrix.tan[2, 2]) / sum(colSums(confmatrix.tan))
+
+# calculate error
+error.tan <- 1 - acc.tan
+
+# calculate confidence interval for accuracy
+acc.ci.tan <- 1.96 * (sqrt((error.tan * acc.tan) / nrow(data.ist.test)))
+
+# retrieve roc performance information
+roc.tan <- with(pred.tan, prediction(predictions = prediction.prob, labels = outcome)) %>%
+            performance("tpr", "fpr")
+
+# retrieve precision recall performance information
+precrec.tan <- with(pred.tan, prediction(predictions = prediction.prob, labels = outcome)) %>%
+  performance("prec", "rec")
+
+# create simple plots
+##roc.tan %>% plot
+##precrec.tan %>% plot
+
+# gather roc data
+roc.data.tan <- data.frame(tpr = roc.tan@y.values[[1]], fpr = roc.tan@x.values[[1]])
+
+# gather precision recall data
+precrec.data.tan <- data.frame(prec = precrec.tan@y.values[[1]], rec = precrec.tan@x.values[[1]])
+
+# create accuracy, confidence interval table
+vec.logit <- c("logit", acc.logit - acc.ci.logit, acc.logit, acc.logit + acc.ci.logit)
+vec.dtree <- c("dtree", acc.dtree - acc.ci.dtree, acc.dtree, acc.dtree + acc.ci.dtree)
+vec.nb <- c("nb", acc.nb - acc.ci.nb, acc.nb, acc.nb + acc.ci.nb)
+vec.tan <- c("tan-nb", acc.tan - acc.ci.tan, acc.tan, acc.tan + acc.ci.tan)
+df.acc <- data.frame(rbind(vec.logit, vec.dtree, vec.nb, vec.tan), stringsAsFactors = F)
+names(df.acc) <- c("model", "acc_low_c.i.", "acc", "acc_high_c.i.")
+df.acc$acc_low_c.i. <- round(as.numeric(df.acc$acc_low_c.i.), 5)
+df.acc$acc <- round(as.numeric(df.acc$acc), 5)
+df.acc$acc_high_c.i. <- round(as.numeric(df.acc$acc_high_c.i.), 5)
+df.acc <- arrange(df.acc, desc(acc_low_c.i.))
+
+# create ROC curves for machine learning models
+roc.data.logit$model <- "Logistic Regression"
+roc.data.dtree$model <- "Decision Tree"
+roc.data.nb$model <- "Naive Bayes"
+roc.data.tan$model <- "Tree Augmented Naive Bayes"
+roc.data.all <- rbind(roc.data.logit, roc.data.dtree, roc.data.nb, roc.data.tan)
+roc.plot <- ggplot(data = roc.data.all, mapping = aes(y = tpr, x = fpr, color = model)) + 
+              geom_line() + labs(y = "True Positive Rate", x = "False Positive Rate") +
+              ggtitle("ROC Curves") + scale_color_discrete(name = "Model")
+
+# create precision-recall curves for machine learning models
+precrec.data.logit$model <- "Logistic Regression"
+precrec.data.dtree$model <- "Decision Tree"
+precrec.data.nb$model <- "Naive Bayes"
+precrec.data.tan$model <- "Tree Augmented Naive Bayes"
+precrec.data.all <- rbind(precrec.data.logit, precrec.data.dtree, precrec.data.nb, precrec.data.tan)
+precrec.plot <- ggplot(data = precrec.data.all, mapping = aes(y = prec, x = rec, color = model)) + 
+                  geom_line() + labs(y = "Precision", x = "Recall") +
+                  ggtitle("Precision Recall Curves") + scale_color_discrete(name = "Model")
+
+# lowest accuracy
+acc.low <- round(min((acc.logit - acc.ci.logit), (acc.dtree - acc.ci.dtree), 
+            (acc.nb - acc.ci.nb), (acc.tan - acc.ci.tan)) * 100, 3)
+
+# highest accuracy
+acc.high <- round(max((acc.logit + acc.ci.logit), (acc.dtree + acc.ci.dtree), 
+            (acc.nb + acc.ci.nb), (acc.tan + acc.ci.tan)) * 100, 3)
+
+# calculate average treatment effect of aspirin
+ate.asp <- data.ist %>% filter(outcome == T & rxasp == "Y") %>% nrow /
+            data.ist %>% filter(rxasp == "Y") %>% nrow - 
+            data.ist %>% filter(outcome == T & rxasp == "N") %>% nrow /
+            data.ist %>% filter(rxasp == "N") %>% nrow
+
+ate.asp.check <- data.ist %>%
+                  count(rxasp, outcome = outcome == T) %>%
+                  group_by(rxasp) %>%
+                  mutate(pct_group = n / sum(n)) %>%
+                  filter(outcome == F) %>%
+                  .[["pct_group"]] %>%
+                  (function(x) {x[1] - x[2]})
+
+# check ate
+#round(ate.asp - ate.asp.check, 5)
+```
+
+
+Use the following machine learning algorithms: logistic regression, naive Bayes, Tree Augmented Naive Bayes, and decision tree (specify any parameters you set that are not the default). The packages that you may find useful here are: "glm", "bnlearn", and "rpart", but you may use others if desired. In a table, report the accuracy with 95% confidence intervals for each algorithm.
+```{r eval=T, echo=F, message=F}
+df.acc
+```
+
+
+Construct an ROC (receiver operating characteristic) curve for each model and overlay them on a graph using ggplot. Include a legend.
+```{r eval=T, echo=F, message=F}
+roc.plot
+```
+
+
+Construct a PR (precision recall) curve for each model. Include a legend.
+```{r eval=T, echo=F, message=F, warning=F}
+precrec.plot 
+```
+
+
+#### Conclusions
+Let's draw conclusions from this study. Specifically,
+
+- how well are we able to predict death or dependence at 6 months?
+
+The accuracy of these models range from `r acc.low` to `r acc.high`.
+
+
+- what is the average treatment effect of aspirin on death or dependence at 6 months? Is aspirin significantly better than the alternative?
+
+The average treatment effect of aspirin on death or dependence at 6 month is `r round(ate.asp, 5)`. The probability of the outcome decreased by `r round(ate.asp * 100, 5)`. According to the study, the difference between 62.2% and 63.5% in the outcome variable was not significant (without adjustment for baseline prognosis).
+
+
+- of the algorithms tested, which algorithms perform the best? Justify your statement.
+
+The logistic regression model performed the best. It had the highest accuracy, looks best on the ROC curves graph and the precision-recall curves graph. At the far right of the precision-recall curves graph, logistic regression is very competitive if not the best. 
